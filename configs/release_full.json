@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "seed": 20260821,
+  "android_dex": "",
+  "scope": {
+    "protect": [
+      {"pattern": "Lcom/example/**;", "include_members": true}
+    ],
+    "keep": [
+      {"pattern": "Landroid/**;", "allow_renaming": false, "allow_code_transforms": false},
+      {"pattern": "Ljava/**;", "allow_renaming": false, "allow_code_transforms": false},
+      {"pattern": "Lkotlin/**;", "allow_renaming": false, "allow_code_transforms": false}
+    ]
+  },
+  "budget": {
+    "max_code_units_per_method": 65000,
+    "max_registers_per_method": 255,
+    "max_added_blocks_per_method": 1024,
+    "max_added_try_regions_per_method": 256,
+    "max_method_growth_ratio": 10000.0,
+    "max_dex_growth_ratio": 512.0,
+    "max_analysis_blocks_per_method": 16384,
+    "max_call_depth_increase": 1024
+  },
+  "rename": {
+    "package_prefix": "b",
+    "overload_methods": true,
+    "rename_source_files": true
+  },
+  "multidex": {
+    "repartition": false,
+    "preserve_input_order": true,
+    "limits": {
+      "strings": 64000,
+      "types": 64000,
+      "protos": 64000,
+      "fields": 64000,
+      "methods": 64000,
+      "call_sites": 64000,
+      "method_handles": 64000
+    }
+  },
+  "strength": {
+    "per_method_strategy": true,
+    "randomized_parameters": true,
+    "reproducible_output": false,
+    "anti_automation_profile": true,
+    "target_analysis_cost_weeks": 52
+  },
+  "fake": {
+    "package_prefix": "Lx/birch_fake/",
+    "class_count": 128,
+    "methods_per_class": 16
+  },
+  "resources": {
+    "rename_files": true,
+    "rename_names": true,
+    "dictionary": ""
+  },
+  "signing": {
+    "enabled": false,
+    "keystore": "",
+    "alias": ""
+  },
+  "output": {
+    "write_mapping": true,
+    "mapping_file": "birch-mapping.txt"
+  },
+  "passes": {
+    "rename.classes": {"enabled": true, "intensity": 1.0},
+    "rename.methods": {"enabled": true, "intensity": 1.0},
+    "rename.fields": {"enabled": true, "intensity": 1.0},
+    "rename.parameters": {"enabled": true, "intensity": 1.0},
+    "rename.packages": {"enabled": true, "intensity": 1.0},
+    "rename.overload_induction": {"enabled": true, "intensity": 1.0},
+
+    "structure.package_flattening": {"enabled": true, "intensity": 1.0},
+    "structure.method_splitting": {"enabled": true, "intensity": 1.0},
+    "structure.method_outlining": {"enabled": true, "intensity": 1.0},
+    "structure.method_inlining": {"enabled": true, "intensity": 1.0},
+    "structure.class_splitting": {"enabled": true, "intensity": 1.0},
+    "structure.proxy_stubs": {"enabled": true, "intensity": 1.0},
+    "structure.class_merging": {"enabled": true, "intensity": 1.0},
+    "structure.interface_abstract_conversion": {"enabled": true, "intensity": 1.0},
+    "reflection.indirect_targets": {"enabled": true, "intensity": 1.0},
+    "loading.encrypted_paths": {"enabled": true, "intensity": 1.0},
+
+    "cfg.flattening": {"enabled": true, "intensity": 1.0},
+    "cfg.nested_flattening": {"enabled": true, "intensity": 1.0},
+    "cfg.multi_state_dispatch": {"enabled": true, "intensity": 1.0},
+    "cfg.bogus_edges": {"enabled": true, "intensity": 1.0},
+    "cfg.loop_state_machine": {"enabled": true, "intensity": 1.0},
+    "cfg.condition_expansion": {"enabled": true, "intensity": 1.0},
+    "cfg.conditional_nesting": {"enabled": true, "intensity": 1.0},
+    "cfg.table_dispatch": {"enabled": true, "intensity": 1.0},
+    "cfg.indirect_dispatch": {"enabled": true, "intensity": 1.0},
+    "cfg.mixed_ps_ss_if": {"enabled": true, "intensity": 1.0},
+    "cfg.exception_dispatch": {"enabled": true, "intensity": 1.0},
+    "cfg.callback_style": {"enabled": true, "intensity": 1.0},
+    "cfg.tail_recursion": {"enabled": true, "intensity": 1.0},
+    "cfg.dead_blocks": {"enabled": true, "intensity": 1.0},
+    "cfg.block_reordering": {"enabled": true, "intensity": 1.0},
+
+    "predicate.number_theory": {"enabled": true, "intensity": 1.0},
+    "predicate.polynomial": {"enabled": true, "intensity": 1.0},
+    "predicate.matrix": {"enabled": true, "intensity": 1.0},
+    "predicate.bitwise": {"enabled": true, "intensity": 1.0},
+    "predicate.floating_point": {"enabled": true, "intensity": 1.0},
+    "predicate.hash_collision": {"enabled": true, "intensity": 1.0},
+    "predicate.cross_process": {"enabled": true, "intensity": 1.0},
+    "predicate.cross_class_state": {"enabled": true, "intensity": 1.0},
+    "predicate.crypto": {"enabled": true, "intensity": 1.0},
+    "predicate.graph_problem": {"enabled": true, "intensity": 1.0},
+    "predicate.class_loading_state": {"enabled": true, "intensity": 1.0},
+    "predicate.reference_identity": {"enabled": true, "intensity": 1.0},
+    "predicate.history": {"enabled": true, "intensity": 1.0},
+    "predicate.overflow": {"enabled": true, "intensity": 1.0},
+
+    "data.string_encryption": {"enabled": true, "intensity": 1.0},
+    "data.string_splitting": {"enabled": true, "intensity": 1.0},
+    "data.constant_splitting": {"enabled": true, "intensity": 1.0},
+    "data.array_virtualization": {"enabled": true, "intensity": 1.0},
+    "data.array_splitting": {"enabled": true, "intensity": 1.0},
+    "data.reflection_string_encryption": {"enabled": true, "intensity": 1.0},
+    "data.enum_lowering": {"enabled": true, "intensity": 1.0},
+    "data.boolean_arithmetic": {"enabled": true, "intensity": 1.0},
+    "resources.file_rename": {"enabled": true, "intensity": 1.0},
+    "resources.name_rename": {"enabled": true, "intensity": 1.0},
+
+    "anti_analysis.debug_info_removal": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.annotation_noise": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.path_explosion": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.ssa_pollution": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.constant_barriers": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.instruction_patterns": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.register_shape": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.legal_exception_layout": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.verifier_safe_overlap_substitute": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.decompiler_resilience": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.legal_overlapping_handlers": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.debug_local_noise": {"enabled": false, "intensity": 1.0},
+    "anti_analysis.annotation_forgery": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.dataflow_pollution": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.pattern_randomization": {"enabled": true, "intensity": 1.0},
+
+    "strength.per_method_randomization": {"enabled": true, "intensity": 1.0},
+    "strength.build_parameter_randomization": {"enabled": true, "intensity": 1.0},
+    "strength.anti_automation_profile": {"enabled": true, "intensity": 1.0},
+    "strength.analysis_cost_budget": {"enabled": true, "intensity": 1.0},
+    "fake.classes": {"enabled": true, "intensity": 1.0},
+    "fake.calls": {"enabled": true, "intensity": 1.0}
+  }
+}
+

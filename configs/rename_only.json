@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "seed": 20260820,
+  "android_dex": "",
+  "scope": {"protect": [{"pattern": "Lcom/example/**;"}], "keep": []},
+  "rename": {"package_prefix": "b", "overload_methods": true, "rename_source_files": true},
+  "resources": {"rename_files": false, "rename_names": false},
+  "output": {"write_mapping": true, "mapping_file": "birch-mapping.txt"},
+  "passes": {
+    "rename.classes": {"enabled": true, "intensity": 1.0},
+    "rename.methods": {"enabled": true, "intensity": 1.0},
+    "rename.fields": {"enabled": true, "intensity": 1.0},
+    "rename.packages": {"enabled": true, "intensity": 1.0},
+    "rename.overload_induction": {"enabled": true, "intensity": 1.0},
+    "anti_analysis.debug_info_removal": {"enabled": false, "intensity": 1.0}
+  }
+}

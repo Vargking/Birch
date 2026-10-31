@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "seed": 20260820,
+  "scope": {"protect": [{"pattern": "Lcom/example/**;"}], "keep": []},
+  "resources": {"rename_files": true, "rename_names": true},
+  "output": {"write_mapping": false, "mapping_file": ""},
+  "passes": {
+    "rename.classes": {"enabled": false, "intensity": 1.0},
+    "rename.methods": {"enabled": false, "intensity": 1.0},
+    "rename.fields": {"enabled": false, "intensity": 1.0},
+    "rename.packages": {"enabled": false, "intensity": 1.0},
+    "anti_analysis.debug_info_removal": {"enabled": false, "intensity": 1.0}
+  }
+}
