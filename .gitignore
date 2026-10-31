@@ -79,9 +79,10 @@ Thumbs.db
 imgui.ini
 gui.png
 
-# One project README; preserve dependency licensing
+# Project READMEs and dependency licensing
 *.md
 !/README.md
+!/README.zh-CN.md
 !/LICENSE.md
 !/ImGUI/glfw-3.4/LICENSE.md
 

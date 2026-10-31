@@ -1,440 +1,298 @@
-# Birch / BirchGuard
+# Birch
 
-A C++20 Android DEX/APK transformation and obfuscation toolkit with a CLI, desktop GUI, and static verification.
+[简体中文](README.zh-CN.md) · English
 
-C++20 编写的 Android DEX/APK 变换与混淆工具链，提供命令行、桌面 GUI 和静态验证。
+Birch is a C++20 project for editing Android DEX files and applying obfuscation to DEX and APK files. It has two main modules: **BirchDex**, the DEX editing library, and **BirchGuard**, the configuration-driven transformation pipeline built on top of it.
 
-**Research-oriented software: successful transformation does not prove Android runtime compatibility or resistance to reverse engineering.**
+The project works on DEX instructions and APK structures directly. It does not decompile applications to Java or rebuild them through an Android project. APK output is unsigned and must be signed separately.
 
-**研究型工具：转换成功不等于 Android 运行时兼容性验证，也不构成抗逆向效果保证。**
+## Modules
 
-## GitHub description / 项目描述
+### BirchDex — DEX editing library
 
-English About text:
+BirchDex provides the file model, writer, and analyses needed to build DEX tools. Use it when you need to inspect bytecode, generate classes, replace method bodies, or redistribute classes between DEX files without running the BirchGuard pipeline.
 
-> A C++20 Android DEX/APK obfuscation toolkit with a CLI, desktop GUI, control-flow transformations, and static verification.
+Its CMake target is `BirchDex`, its namespace is `birch::dex`, and its public headers are in [include/birch/dex](include/birch/dex).
 
-中文 About 文案：
+- **Parsing and inspection.** `DexFile::Parse` reads headers, ID tables, class definitions, class data, and the map list. It exposes descriptors, method signatures, fields, strings, and original bytes. Parse errors carry an error code and byte offset.
+- **Construction and cloning.** `DexBuilder` builds DEX from `ClassSpec`, `MethodSpec`, and `MethodBodySpec`. Method bodies use code units with symbolic reference patches, so callers do not need to predict final method or string IDs. `DexClassCloner` converts existing classes into this construction model, including supported annotations, static values, exception handlers, and debug information.
+- **Rewriting and relocation.** String replacement, debug stripping, ID remapping, instruction replacement, and complete method-body replacement have separate entry points. Writers relocate affected data and code addresses, update references, and regenerate checksums. This is what allows an edit to change size rather than requiring a same-length binary patch.
+- **Bytecode analysis.** Instruction decoding and `MethodIr` expose basic blocks and control-flow edges. `ControlFlowGraph`, type analysis, `MethodLiveness`, exception-region analysis, and monitor-depth analysis supply the information needed to decide whether a rewrite is valid.
+- **Multi-DEX operations.** `DexProgram` represents several DEX inputs. Linking and inheritance checks resolve relationships across them; the partitioner counts the IDs referenced by each class and groups classes under configured limits. `RepartitionProgram` then clones and rebuilds those groups as separate DEX files.
+- **Verification.** Structural, instruction, type, checksum, canonical-order, linkage, and inheritance checks cover different failure modes. They are static checks, not an implementation of the Android runtime.
 
-> C++20 编写的 Android DEX/APK 混淆工具链，提供命令行、桌面 GUI、控制流变换与静态验证。
+`DexFile` is not a mutable object tree that automatically serializes every edit. Its `Write()` returns the retained bytes, making an untouched parse/write round trip byte-for-byte stable. Rewriting methods and builders return new byte buffers; parse those buffers when continuing with another edit.
 
-Suggested topics / 建议标签：`android`, `dex`, `apk`, `obfuscation`, `cpp20`, `control-flow`, `imgui`, `cmake`.
+Start with [dex_file.h](include/birch/dex/dex_file.h), [builder.h](include/birch/dex/builder.h), [remap.h](include/birch/dex/remap.h), and [cloner.h](include/birch/dex/cloner.h). The library does not depend on BirchGuard, the GUI, or APK configuration.
 
-## Contents / 导航
+### BirchGuard — DEX/APK obfuscation pipeline
 
-- [中文说明](#中文说明)：实现原理、构建、使用、限制、路线图、贡献和许可。
-- [English documentation](#english-documentation): implementation, build, usage, limitations, roadmap, contributions, and licensing.
+BirchGuard uses BirchDex to turn a set of bytecode transformations into an application-level workflow. It decides which classes may change, coordinates passes, keeps cross-file references consistent, and checks the result before writing output.
 
-## 中文说明
+The implementation is the `BirchGuardLib` static library, in namespace `birch::guard`. The executable named `BirchGuard` is its command-line frontend; it is not a second implementation of the engine.
 
-### 1. 项目定位与能力边界
+BirchGuard is responsible for:
 
-Birch 是项目名；BirchGuard 是保护流水线和主要用户入口。项目直接处理 DEX，以及 APK 中的 DEX、二进制 AndroidManifest.xml、resources.arsc 和 ZIP 条目，不依赖反编译为 Java 再重新编译。
+- **Configuration and scope.** Parsing JSON, validating pass options, selecting classes through descriptor patterns, and applying keep rules. Renaming, member inclusion, and code transformations can be controlled separately.
+- **Transformation planning.** Running class/method-level passes, creating helper code, lowering model changes to DEX instructions, and applying control-flow, string, constant, and metadata transformations.
+- **Whole-application renaming.** Building one plan for all DEX files, preserving known lookup and access requirements, and updating supported reflection sites, binary XML, and class-list entries.
+- **APK and resource handling.** Reading and rebuilding ZIP entries, rewriting supported manifest/resource references, handling DEX layout and optional repartitioning, and removing signatures that no longer match the modified APK.
+- **Validation and reporting.** Enforcing growth and method-size budgets, checking final DEX/linkage/layout, and writing name mappings, technique reports, and progress events.
 
-| 组件 | 职责 |
+[GuardPipeline](include/birch/guard/pipeline.h) is the public entry point. `FromJson` and `FromConfig` create a pipeline; `InspectApk`, `TransformDex`, and `TransformApk` perform the work. Overloads accept a `ProgressSink` for embedding in another application.
+
+The supplied frontends share these libraries:
+
+| Target | Purpose |
 | --- | --- |
-| BirchDex | DEX 解析/构建/写回、指令与 CFG、类型和活跃性分析、验证、链接及分区基础设施 |
-| BirchGuardLib | 配置与 scope、变换调度、控制流保护、跨 DEX 重命名、资源处理及报告 |
-| BirchGuard | 配置驱动的 APK/DEX 检查和转换 CLI |
-| Birch | DEX map、CFG、验证、CFF 审计和 APK 检查等低层诊断 CLI |
-| BirchLinkageAudit | APK/DEX 的只读链接审计，可额外提供 Android framework DEX |
-| BirchGuardGUI | Dear ImGui + GLFW + OpenGL 3 桌面界面 |
+| `BirchGuard` | JSON-driven DEX/APK inspection and transformation |
+| `BirchGuardGUI` | Desktop frontend using Dear ImGui, GLFW, and OpenGL 3 |
+| `Birch` | DEX map, CFG, verification, CFF audit, and partition diagnostics |
+| `BirchLinkageAudit` | Read-only APK/DEX linkage audit, with optional framework metadata |
 
-已实现的保护包括重命名、受限结构变换、类型域感知控制流平坦化、不透明谓词、字符串与常量变换、伪代码和资源文件/名称混淆。部分 pass 只适用于可证明安全的指令、类型或结构，并不保证每个方法都应用同样的变换。
+The dependency direction is frontends → `BirchGuardLib` → `BirchDex`. For a bytecode editor, link `BirchDex`; for the configured protection workflow, link `BirchGuardLib`.
 
-本项目不是完整 Android 应用构建系统、AAB/JAR 转换器、原生代码保护器、通用字节码虚拟机或加密壳。pass 名称中的 `crypto`、`cross_process`、`encrypted_paths`、`array_virtualization` 不代表标准密码协议、独立进程、完整类加载壳或完整 VM。实际实现以源码中的 [technique_catalog.cpp](src/birch/guard/technique_catalog.cpp) 和每次输出的技术报告为准。
+## Build
 
-### 2. 核心实现原理
+Requirements:
 
-#### 2.1 解析、分析与写回
+- CMake 3.22 or newer.
+- A C++20 compiler and zlib development files.
+- Ninja for the commands below.
+- For the GUI: a C compiler, threads, and desktop OpenGL development files.
 
-流水线读取 APK ZIP、manifest、资源表及一个或多个 DEX，解析配置和保护范围，建立类型、继承、引用和控制流信息。模型级变换可以生成 helper 类/方法，随后降低到 DEX 指令；全局重命名规划同步更新跨 DEX 引用以及已支持的 manifest/资源引用。最终重映射 ID、布局和写回，并执行结构、类型、代码预算、链接与旧版 Android DEX 装载约束检查。
+Dear ImGui 1.93.0 and GLFW 3.4 are included under `ImGUI/`. The build does not download missing dependencies.
 
-简化顺序：
-
-```text
-输入解析 → scope/keep 与链接信息 → 变换规划与模型改写
-        → DEX lowering / CFF / helper 生成 → 全局重命名与资源同步
-        → 重映射 / 可选多 DEX 分区 → 最终验证 → 输出与报告
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBIRCH_BUILD_GUI=ON -DBIRCH_BUILD_TESTS=ON
+cmake --build build --parallel 4
+ctest --test-dir build --output-on-failure -j 3
 ```
 
-`android_dex` 是可选的 Android framework 元数据，用来辅助判断外部继承和 override 合同，不会作为应用代码复制进输出。应由使用者提供匹配目标 Android API 的 framework DEX；缺失或不匹配会限制分析覆盖与重命名安全性。
+For a CLI-only build, configure a separate directory with `-DBIRCH_BUILD_GUI=OFF`. Tests can be disabled with `-DBIRCH_BUILD_TESTS=OFF`.
 
-#### 2.2 重命名与运行时合同
+Windows builds have been exercised with MinGW-w64/GCC. Keep the compiler runtime DLLs available on `PATH`. With a Visual Studio generator, omit `-G Ninja`, add `--config Release` to the build command, and use `-C Release` for CTest; that toolchain needs independent validation.
 
-类、方法、字段和包的名称由全局规划生成，并维护跨 DEX 引用闭包。规划器对 framework override、包可见性、native/JNI 和可识别的反射合同采取保守处理；动态拼接名称、第三方插件、序列化、JNI 绑定等仍可能需要明确的 keep 规则。
+If zlib is not found, set `-DZLIB_ROOT=<prefix>`, or provide `ZLIB_INCLUDE_DIR` and the full `ZLIB_LIBRARY` path. The MinGW fallback uses the compiler installation's zlib only when its headers and library exist.
 
-scope 使用 DEX descriptor 模式，例如 `Lcom/example/**;`。keep 匹配优先于 protect，匹配 keep 的类型不进入常规保护；保护规则可用 `allow_renaming`、`allow_code_transforms`、`include_members` 限制行为。多个匹配 protect 规则中任一相关标志为 false，都会阻止该类的对应行为。引擎生成的保留命名空间有专门的 scope 处理，helper 仍可参与后续保护。
+Linux GUI builds need the development packages for the enabled GLFW X11/Wayland backends and OpenGL. Add `-DGLFW_BUILD_WAYLAND=OFF` if Wayland is not needed. Linux and macOS builds still need broader testing.
 
-#### 2.3 类型域感知的控制流平坦化
+### Using the libraries in another project
 
-控制流保护结合 CFG、寄存器类型帧与活跃性分析，把兼容块放入类型域，使用多级 keyed dispatcher、编码 state/selector、joint token 和运行时 barrier 改写转移。未知类型、未初始化对象、异常入口等不安全状态不能任意合并。死图包含编码转移、局部解码岛与分片 switch，而不只是大量指向同一位置的空 goto。
+With Birch checked out under `external/Birch`:
 
-长方法通过 ConstantProgramOutliner、LinearRegionOutliner 和 CfgRegionPlanner / CfgRegionOutliner 提取符合合同的区域。区域必须满足入口、continuation、类型、live-in/live-out、异常和 monitor 约束；不能拆开 `invoke/move-result`，不能任意跨 try 边界或移动 handler/monitor。锁保持在 caller；不能证明安全的区域会被拒绝。
+```cmake
+set(BIRCH_BUILD_GUI OFF CACHE BOOL "")
+set(BIRCH_BUILD_TESTS OFF CACHE BOOL "")
+add_subdirectory(external/Birch)
 
-CffCodeBudget 在发射前精确统计业务指令、转移、死图、payload 与对齐，发射后再次核对实际尺寸。CffPartitionPlanner 在专用预算失败时从 materialization 前的源状态重新规划，定向提取/分片并重跑，重试有上限。它不会通过偷偷降低强度、减少死状态或更换 `seed` 来掩盖失败。
+target_link_libraries(my_tool PRIVATE BirchDex)
+# For the protection pipeline, link BirchGuardLib instead.
+```
 
-最高强度策略包含 1024 死状态及内部 **16000 code-unit** 门禁。一个 DEX code unit 是 16 位，不是一个字节；配置中的 `max_code_units_per_method: 65000` 不会关闭这个更严格的内部限制。完整 CFF 在布局固定前使用 `const-string/jumbo`，将真实尺寸计入预算，避免后续字符串 ID 重排突然扩宽指令。
+Public include directories are propagated by the targets. `BirchGuardLib` also links BirchDex and zlib. The top-level build currently discovers zlib even if your application only links BirchDex. Installed `find_package(Birch)` exports and a stable library ABI are not provided yet.
 
-独立的 OutputCodeBudget 在重命名与最终分区之后检查 serialized code-item 大小，通过 rename map 还原原 owner 后判断 scope。它是最终拒绝门禁，不在出口偷偷重新分片；无法满足约束时明确失败。
+### Install and package
 
-#### 2.4 字符串、常量与数据变换
+```sh
+cmake --install build --prefix install
+cpack --config build/CPackConfig.cmake -G ZIP -B dist
+```
 
-字符串使用自定义可逆 UTF-16 变换：4 种 XOR/add 基础模式，加 8 轮逐字符混合，再生成运行时逆变换。**它不是 AES/ChaCha，不提供密码学保密性；密钥和还原逻辑都随应用分发。**
+For multi-configuration generators, add `--config Release` to installation and `-C Release` to CPack. The ZIP contains installed tools, enabled GUI, libraries, headers, configurations, and dependency notices. Compiler and zlib runtime dependencies are not bundled automatically.
 
-常量可变成 XOR/add 程序，结合类型化 barrier、布尔算术、受限数组/枚举变换及元数据噪声。覆盖范围取决于支持的指令和安全合同；并非所有字符串、常量或资源都会被改写。
+## Usage
 
-#### 2.5 资源与 APK 一致性
+### Configuration
 
-文件混淆生成经过碰撞检查的 16-token Unicode basename，同步更新 ZIP 条目与 ARSC 路径，保留扩展名、`.9.png` 语义和原 ZIP 条目顺序。安全的资源 package key-pool 名称可变为 BirchGuard；资源 ID、类型名称与面向用户的文本不被故意改变。
+Three starting configurations are provided:
 
-按名查询、`getIdentifier`、反射、native、overlay 或直接路径字面量等证据会触发保守保留。保留原因和兼容性警告写入报告，不能承诺所有 APK 都能安全地重命名所有资源。
+| File | Intended use |
+| --- | --- |
+| [rename_only.json](configs/rename_only.json) | Renaming-focused configuration |
+| [resource_only.json](configs/resource_only.json) | APK resource transformations |
+| [release_full.json](configs/release_full.json) | High-strength profile with substantial code growth |
 
-#### 2.6 随机化与可复现
+Before use, replace `Lcom/example/**;` in `scope.protect` with your application's DEX descriptor pattern. Add keep rules for classes whose names or behavior are used externally. `scope.keep` takes precedence over protect rules.
 
-`seed` 是基础输入。开启 `strength.build_parameter_randomization` 且允许参数随机化时，引擎会混合配置；`strength.reproducible_output=false` 还会混入运行时熵。同一份 JSON 不一定生成相同输出。
+Unlisted passes inherit engine defaults. The `_only` filenames do not disable other passes automatically; explicitly disable unwanted passes when you need a strict selection. Unknown fields and pass IDs are rejected.
 
-复现已记录的有效参数可在根配置加入：
+`android_dex` optionally supplies Android framework metadata for inheritance and method resolution. Match it to the target Android API. The framework is analyzed, not copied into the output. Paths in JSON are relative to the process working directory, not the configuration file.
+
+### Command line
+
+Run these commands from the repository root. On Windows, executable names have an `.exe` suffix.
+
+```sh
+./build/BirchGuard --list-passes
+./build/BirchGuard --config configs/rename_only.json --inspect-apk input.apk
+./build/BirchGuard --config configs/rename_only.json --transform-apk input.apk output-unsigned.apk
+./build/BirchGuard --config my-dex.json --transform-dex input.dex output.dex
+```
+
+For standalone DEX output, disable both resource flags (`resources.rename_files`, `resources.rename_names`) and both resource passes (`resources.file_rename`, `resources.name_rename`).
+
+Diagnostic tools:
+
+```sh
+./build/Birch input.dex --verify
+./build/Birch input.dex --scan-cfg
+./build/Birch input.dex --map
+./build/Birch input.dex --audit-cff
+./build/BirchLinkageAudit input.apk
+./build/BirchLinkageAudit input.apk android.dex --verbose
+```
+
+The transformation writes the requested APK/DEX, `<output>.techniques.txt`, and an optional mapping file. The report records the effective seed, implementation descriptions, available application counters, and compatibility warnings. A configured pass may have no eligible site; `not instrumented` means no exact counter is available.
+
+Keep mappings and reports separately from the released application. Input, output, mapping, and report paths must be distinct, including hard-link aliases. The CLI can replace existing output files.
+
+Exit codes are 0 for success, 2 for invalid arguments, and 1 for parsing, transformation, or verification failures.
+
+### GUI and APK signing
+
+Run `build/tools/gui/BirchGuardGUI`. It exposes the same engine through file selection/drag-and-drop, configuration import, scope rules, pass filtering, and strength controls. Work runs on a background thread; settings remain locked until the job finishes. Cancellation and resume are not implemented.
+
+APK output is unsigned. Use external Android SDK tools to align, sign, and verify it. No built-in signing backend is available. Changing the signing certificate can affect application updates and integrations; test the signed APK on the intended devices.
+
+## Implementation
+
+### DEX rewriting and final validation
+
+DEX instructions refer to numeric IDs for strings, types, fields, methods, and prototypes. Adding a helper or changing a descriptor can alter ID ordering and instruction widths. Copying a modified string into the original byte range is therefore not a general rewriting strategy.
+
+BirchDex rebuilds or relocates the affected sections and applies the corresponding ID and address maps. Code rewriting must account for branch offsets, switch and array payloads, try ranges, handler addresses, and debug addresses. Canonical remapping restores the required table ordering; checksums are regenerated after the byte layout is settled.
+
+BirchGuard coordinates this across the application: it plans scope and runtime requirements, performs model and instruction transformations, applies shared renames, optionally repartitions DEX, then rebuilds the APK. Final bytes are parsed again and checked for structure, types, method size, cross-DEX linkage, and legacy DEX loading layout.
+
+See [remap.cpp](src/birch/dex/remap.cpp), [builder.cpp](src/birch/dex/builder.cpp), and [pipeline.cpp](src/birch/guard/pipeline.cpp).
+
+### Cross-DEX renaming
+
+Renaming is planned across all input DEX files rather than independently for each file. A reference from `classes2.dex` must resolve to the same renamed definition in `classes.dex`.
+
+The planner collects names that must remain available, builds method-conflict information, and allocates replacements without introducing known lookup conflicts. Framework names are reserved to avoid accidentally turning an unrelated method into an override. Classes may keep their original package while changing their simple name when moving them would break package-private access.
+
+Recognized reflection sites use a precomputed rename plan. Names used by those sites are locked while model transformations add classes and methods; the final plan checks that those mappings remain stable. Supported manifest, resource XML, service-list, and other class-list references join the same name mapping.
+
+This does not resolve arbitrary dynamically constructed names. JNI, serialization, plugins, and application-specific lookup conventions can still require explicit keep rules.
+
+See [rename_planner.cpp](src/birch/guard/rename_planner.cpp), [runtime_contract.cpp](src/birch/guard/runtime_contract.cpp), and [package_access.cpp](src/birch/guard/package_access.cpp).
+
+### Type-aware control-flow flattening
+
+Control-flow flattening replaces eligible direct block transitions with state updates and dispatcher branches. BirchGuard uses encoded state/selector values, keyed dispatcher levels, joint-token checks, and generated runtime barriers. Dead states form a separate graph with encoded edges, local decoders, and sharded switches.
+
+A shared dispatcher also creates new control-flow joins. If one incoming path holds an integer in a register and another holds an object reference there, merging them can make otherwise valid DEX fail type verification.
+
+`CffTypeDomains` therefore groups exits by compatible register-type states. When liveness projection is enabled, a register can be ignored only if the analysis proves it is overwritten before use. Grouping and liveness are refined until the grouping stops changing, so values made relevant by new shared paths are not lost. Uninitialized references and exception-sensitive states impose additional restrictions.
+
+Explicit `monitor-enter`/`monitor-exit` instructions disable domain sharing: equal register types alone do not establish that the same lock is held on each path.
+
+See [control_flow_flattener.cpp](src/birch/guard/control_flow_flattener.cpp), [cff_type_domains.cpp](src/birch/guard/cff_type_domains.cpp), and [cff_transition_encoder.cpp](src/birch/guard/cff_transition_encoder.cpp).
+
+### Method splitting and code budgets
+
+Flattening, constant expansion, and dead graphs can turn a small source method into a large output method. BirchGuard uses several forms of outlining:
+
+- `ConstantProgramOutliner` moves complete generated constant programs into same-owner helpers, preserving their operations and leaving typed runtime barriers at the call site.
+- `LinearRegionOutliner` extracts eligible straight-line regions whose live outputs are unchanged.
+- `CfgRegionPlanner` and `CfgRegionOutliner` handle single-entry, single-continuation regions with internal branches or loops. Live inputs become typed arguments; supported live outputs are returned or reconstructed.
+
+A region cannot be split through an `invoke`/`move-result` pair, entered from an external edge in its interior, or moved across incompatible exception contexts. Monitor instructions are not extracted. A region inside one unchanged try context can become a call covered by the original handlers; locks stay in the caller. Generated helpers remain subject to subsequent protection and verification.
+
+`CffCodeBudget` counts emitted instructions, transitions, dead-state code, payloads, and alignment before committing the layout, then reconciles that count against the emitted code. Dedicated budget failures can trigger bounded outlining/replanning retries. CFG refinement starts from the pre-materialization source rather than layering another transform over a failed trial.
+
+The supplied full profile requests 1024 dead states. Full-strength methods also have a 16000-code-unit ceiling, or a lower configured limit. One code unit is 16 bits; setting `max_code_units_per_method` to 65000 does not remove the stricter ceiling. Full CFF uses `const-string/jumbo` before layout is fixed to account for possible string-ID growth.
+
+After renaming and repartitioning, `OutputCodeBudget` checks serialized method sizes again, resolving renamed owners back to the original scope. Remaining overflow is an error; this final check does not repartition or reduce the requested strength.
+
+See [cff_code_budget.cpp](src/birch/guard/cff_code_budget.cpp), [cff_partition_planner.cpp](src/birch/guard/cff_partition_planner.cpp), and [output_code_budget.cpp](src/birch/guard/output_code_budget.cpp).
+
+### Strings and constants
+
+String transformations operate on UTF-16 code units decoded from DEX modified UTF-8, rather than treating a Java string as ordinary UTF-8 bytes. This preserves the representation of embedded NUL and surrogate pairs.
+
+For each string, a stable hash of its value and seed selects one of four XOR/add modes and derives three 16-bit keys. The base transform is followed by eight index-dependent rounds:
+
+```text
+x = base_transform(unit, index, k1, k2, k3)
+for r = 0 .. 7:
+    x ^= uint16(index + 17 * r)
+    x += uint16(k1 + 0x1357 * r)
+    x ^= uint16(k2 ^ (k3 + 0x246d * r))
+    x &= 0xffff
+```
+
+The transformed units are stored in generated byte-array payloads. Original string loads call generated helper methods, whose instructions apply the inverse rounds, construct a `String` from a `char[]`, and clear temporary arrays. Complete literals are interned to preserve `const-string` identity behavior; private split fragments are not interned.
+
+Constant passes similarly replace supported loads with XOR/add programs and typed barriers. They must distinguish integer zero from a null reference and preserve the operand types expected by later instructions.
+
+These transformations obscure static representation, but the decoder and keys ship with the application. They are not a substitute for keeping secrets outside the APK.
+
+See [model_strings.cpp](src/birch/guard/model_strings.cpp), [dex_lowering.cpp](src/birch/guard/dex_lowering.cpp), and [constant_program_outliner.cpp](src/birch/guard/constant_program_outliner.cpp).
+
+### Resource rewriting
+
+Resource planning runs against the original DEX strings, before string transformations hide literal references. It examines ARSC strings, resource-name/path API references, assets, native-library presence, and overlay metadata.
+
+Eligible resource filenames receive a collision-checked basename made from 16 dictionary tokens. The directory and suffix are retained, including the full `.9.png` suffix. ZIP entry names and ARSC paths are updated together; supported binary XML path references are updated as well. ZIP entry renames preserve entry order, and the result is checked for matching paths in ARSC and the archive.
+
+Resource key-pool names can be replaced with `BirchGuard` when no detected name dependency blocks the change. Resource IDs, type names, and user-facing values are not intentionally rewritten. Dynamic lookup, literal paths, assets, native code, or overlays can cause individual entries or whole categories to remain unchanged. These checks are conservative heuristics, not a complete analysis of native or dynamically loaded code.
+
+See [resource_obfuscator.cpp](src/birch/guard/resource_obfuscator.cpp), [arsc.cpp](src/birch/guard/arsc.cpp), and [axml.cpp](src/birch/guard/axml.cpp).
+
+### Seeds and replay
+
+The effective seed can differ from the configured `seed`. When build-parameter randomization is enabled, selected configuration values and pass settings are mixed into it. Non-reproducible mode also adds runtime entropy.
+
+To replay a reported parameter set, add the recorded seed at the JSON root:
 
 ```json
 "effective_seed": "16919314818285478265"
 ```
 
-保留原输入、配置、framework 和引擎版本，不需要关闭 pass 或降低强度。正常随机构建时移除此项。`seed`、`effective_seed` 和逐 pass `seed` 支持 `uint64` 十进制字符串；超过 `9007199254740991` 必须用字符串，以避免 JSON 数值精度损失。`target_analysis_cost_weeks` 只是策略启发式输入，不是实际逆向耗时承诺。
+Keep the original input, configuration, framework, and engine revision. This overrides seed derivation; it is not a guarantee of identical output across different engine versions or environments. Root and per-pass seeds accept decimal `uint64` strings. Values above 9007199254740991 must use strings to avoid JSON numeric precision loss.
 
-### 3. 源码布局与依赖
+## Tests
 
-```text
-CMakeLists.txt          构建、测试、安装与 CPack 配置
-main.cpp               低层诊断 CLI
-include/birch/         公共头文件
-src/birch/dex/         DEX、CFG、分析、验证与分区
-src/birch/guard/       混淆、lowering、APK/资源与报告
-src/birch/io/          文件与 APK 条目 IO
-src/birch/utils/       哈希与通配符工具
-tools/                 CLI、审计与开发工具
-tools/gui/             GUI、配置模型与后台任务
-configs/               通用 JSON 配置
-tests/                 合成输入回归测试及其支持代码
-ImGUI/                 vendored ImGui / GLFW 构建依赖
-licenses/              第三方许可说明
-```
-
-源码分发只需要核心代码、依赖、配置和测试源码。应用样本、framework 二进制、历史版本说明、映射、签名密钥与构建产物不应提交；`.gitignore` 已排除这些类别以及未使用的第三方示例/后端。ignore 规则不是物理删除，也不会删除已经跟踪的文件。第三方许可文件即使是 Markdown 也应保留。
-
-### 4. 从源码构建
-
-需要 CMake **3.22+**、支持 C++20 的编译器、zlib 开发头文件与库；GUI 还需要 C 编译器、线程支持和桌面 OpenGL 开发环境。ImGui 1.93.0 与 GLFW 3.4 源码随项目提供，不会自动联网拉取缺失依赖。
-
-在已配置编译器、Ninja 和 zlib 的终端中执行：
-
-```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBIRCH_BUILD_GUI=ON -DBIRCH_BUILD_TESTS=ON
-cmake --build build --parallel 4
-ctest --test-dir build --output-on-failure -j 3
-```
-
-Windows 可使用 MinGW-w64/GCC；运行时需要其 DLL 可被系统找到（例如编译器 bin 在 PATH 中）。使用 Visual Studio 生成器时省略 `-G Ninja`，构建加 `--config Release`，测试加 `-C Release`；这条工具链需自行验证，不代表所有编译器组合均已测试。
-
-找不到 zlib 时向 configure 命令提供 `-DZLIB_ROOT=路径`，或 `-DZLIB_INCLUDE_DIR=头文件目录` `-DZLIB_LIBRARY=库文件完整路径`。只有实际存在的 MinGW 配套 zlib 才会被 fallback 使用。
-
-Linux GUI 需要 GLFW 所启用的 X11/Wayland 开发包及 OpenGL；不需要 Wayland 时可在 configure 加 `-DGLFW_BUILD_WAYLAND=OFF`。macOS 需要相应开发工具和 OpenGL 3.2 core 支持。本地验证以 Windows 为主，不把 Linux/macOS 源码分支视为已验证的发行支持。
-
-只构建 CLI：
-
-```sh
-cmake -S . -B build-cli -G Ninja -DCMAKE_BUILD_TYPE=Release -DBIRCH_BUILD_GUI=OFF -DBIRCH_BUILD_TESTS=ON
-cmake --build build-cli --parallel 4
-ctest --test-dir build-cli --output-on-failure
-```
-
-单配置构建的主要输出在 `build/`，GUI 在 `build/tools/gui/`；多配置生成器会增加 `Release/` 等子目录。BirchDex 和 BirchGuardLib 可作为同一源码树内的静态库 target 使用。目前没有稳定 ABI 或完整的已安装 `find_package(Birch)` 导出接口。
-
-安装及标准 ZIP 打包：
-
-```sh
-cmake --install build --prefix install
-cpack --config build/CPackConfig.cmake -G ZIP -B dist
-```
-
-多配置构建分别追加 `--config Release` / `-C Release`。安装包含 CLI、启用时的 GUI、两项核心静态库、公共头文件、配置和许可。CPack ZIP 是安装产物，不是完整源码归档；不会自动捆绑编译器/zlib 运行时，请在干净机器检查依赖。旧的应用样本打包脚本不属于本源码分发流程。
-
-### 5. 配置与命令行
-
-先执行 `build/BirchGuard --list-passes`（Windows 加 .exe）查看当前 pass ID。三个配置位于 `configs/`：
-
-| 配置 | 用途与注意事项 |
-| --- | --- |
-| [rename_only.json](configs/rename_only.json) | 以重命名为主的起点；仍继承未列出的引擎默认值 |
-| [resource_only.json](configs/resource_only.json) | 以 APK 资源变换为主的起点；不是独立 DEX 配置 |
-| [release_full.json](configs/release_full.json) | 高强度、高增长的研究配置，不是适合所有应用的生产默认值 |
-
-JSON 中未列出的 pass 继承引擎默认值，文件名中的 `_only` 不会自动关闭其他 pass。需要严格白名单时逐项显式关闭不需要的 pass。未知字段、pass ID 和非法参数会被验证器拒绝。
-
-使用前将 `scope.protect` 的 `Lcom/example/**;` 替换为自己的应用 descriptor；根据需要填写 `android_dex`、keep 规则和独立的 mapping 路径。JSON 内相对路径基于**进程当前工作目录**，不是 JSON 文件所在目录。通用配置不包含应用或 framework 样本。
-
-以下 Windows PowerShell 示例在项目根目录执行，`input.apk` / `input.dex` 由使用者提供：
-
-```powershell
-.\build\BirchGuard.exe --list-passes
-.\build\BirchGuard.exe --config configs/rename_only.json --inspect-apk input.apk
-.\build\BirchGuard.exe --config configs/release_full.json --transform-apk input.apk output-unsigned.apk
-.\build\BirchGuard.exe --config my-dex.json --transform-dex input.dex output.dex
-.\build\Birch.exe --help
-.\build\Birch.exe input.dex --verify
-.\build\Birch.exe input.dex --scan-cfg
-.\build\BirchLinkageAudit.exe input.apk
-```
-
-Linux/macOS 使用 ./build/BirchGuard 等可执行路径。独立 DEX 任务须关闭 `resources.rename_files`、`resources.rename_names` 及 `resources.file_rename` / `resources.name_rename` 两个 pass。GUI 会拒绝不兼容的资源设置。
-
-其他诊断入口包括 `Birch input.dex --map`、`--audit-cff`，`Birch --partition <目录>`、`Birch --inspect-apk <APK>`；审计支持 `BirchLinkageAudit <APK或DEX> [android.dex] [--verbose]`。`BirchGuard --config <JSON> --prepare-fake-dex <输出DEX>` 可生成研究用伪 DEX，不是可安装应用。
-
-正常成功返回 0，错误参数返回 2，解析/转换/验证失败返回 1。Windows CLI 使用窄字符 argv，某些系统代码页下的 Unicode 路径可能有问题；必要时使用 ASCII 路径或 GUI。
-
-转换会输出目标 APK/DEX、`<输出路径>.techniques.txt`，以及 `write_mapping=true` 时指定的 mapping。报告记录有效 `seed`、实际实现、已记录计数和兼容警告；`not instrumented` 或零计数不是保护已生效的证据。mapping 与报告可能暴露名称对应关系和构建参数，应私下保存，不随受保护应用发布。
-
-输入、输出、mapping 和报告不得重叠，包括硬链接别名。CLI 可以替换已有输出，请事先备份；GUI 会请求替换确认。
-
-### 6. GUI 与 APK 签名
-
-运行 `build/tools/gui/BirchGuardGUI`。界面为英文桌面应用，采用 iOS 风格视觉，并不是 iOS 应用。支持路径输入/拖放、JSON 导入、scope、framework、mapping、pass 筛选和强度调整。Balanced / Strong / Maximum 的 Apply preset 会重新开启兼容 pass；`debug_local_noise` 与 `debug_info_removal` 互斥。
-
-后台任务使用配置快照与 `std::jthread`，通过受互斥锁保护、最多 2000 条的进度队列更新界面，不从 worker 调用 ImGui。任务期间设置锁定；关闭实时日志不会关闭验证。当前没有取消或断点续跑，任务未完成时关闭窗口会被暂缓；耗时阶段没有可靠百分比。
-
-图形环境可用时可做隐藏窗口检查：
-
-```powershell
-.\build\tools\gui\BirchGuardGUI.exe --smoke-test
-.\build\tools\gui\BirchGuardGUI.exe --screenshot gui.png
-```
-
-这只检查渲染基本可用性，不替代交互、高 DPI 或布局验收。
-
-APK 输出是**未签名 APK**，旧签名会被移除；启用内置签名会报错，目前必须使用外部 Android SDK 工具完成 zipalign、apksigner 签名和签名验证。密钥应属于你或已授权使用，不要将密钥或密码提交到仓库。签名改变可能破坏升级、完整性校验和第三方集成。签名后仍须在目标设备验证安装、启动、核心流程、资源、异常路径和性能。
-
-### 7. 测试与已知缺陷
-
-保留的测试源码使用构造器和运行时生成的合成输入，不要求分发第三方应用 APK、DEX 或 framework。合成 APK 只用于格式/流水线回归，不是可安装应用。Release 测试保留 `assert`，避免因 `NDEBUG` 将断言变为空操作。
+Regression inputs are constructed in code or generated at runtime. No third-party application APK or framework DEX is required. Synthetic APKs exercise formats and pipeline behavior; they are not installable applications.
 
 ```sh
 ctest --test-dir build --output-on-failure
 ctest --test-dir build -L cff-budget --output-on-failure
 ctest --test-dir build -LE extended --output-on-failure -j 3
-ctest --test-dir build -L extended --output-on-failure
 ```
 
-`cff-budget` 覆盖预算、类型域、活跃性、区域提取、异常和锁等；`extended` 当前是较慢的直线区域提取测试。完整 CTest 默认包含这些测试。指令/字符串测试解释器只实现测试所需的语义，不是完整 ART。
+The full suite includes the slower `extended` tests. `cff-budget` selects regressions for code budgets, type domains, liveness, outlining, exceptions, and monitors. Release tests retain assertions. Test interpreters cover only the instruction/API behavior needed by their cases, not all of ART.
 
-目前需要正视的限制：
+## Known limitations
 
-- 静态验证不能替代 Android ART、模拟器和真实设备回归；没有“全部 Android 版本/全部 APK 兼容”的保证。
-- 动态反射、JNI、序列化、插件、资源按名查询和应用自校验仍可能失效；keep 与业务验收是使用者责任。
-- 高强度 CFF、helper 和死图会增加体积、调用深度、构建时间及运行开销，可能明确触发预算拒绝；没有统一性能基准或保护强度评分。
-- 自定义字符串变换、伪代码与不透明谓词可以被分析或自动化还原，不能作为密码学安全边界。
-- 解析器和写回路径尚需更多畸形输入、fuzz 与 sanitizer 覆盖；本地 MinGW 工具链缺少可用 ASan/UBSan runtime，不能声称已通过 sanitizer。
-- Linux/macOS、其他编译器及高 DPI GUI 仍需独立验证；CLI Unicode 路径、GUI 取消/恢复及事务式输出体验仍有改进空间。
-- 不提供内置 APK 签名、Android SDK/framework 下载、稳定库 ABI 或完整安装包依赖收集。
+- Static verification does not replace installation, startup, resource, exception-path, and performance testing on Android devices.
+- Dynamic reflection, JNI, serialization, plugins, resource-name lookup, and application integrity checks can break after transformation.
+- High-strength profiles increase file size, call depth, build time, and runtime work. Some inputs are rejected by safety or size checks.
+- AAB/JAR conversion, native-code protection, a general bytecode VM, and built-in APK signing are not provided. Pass names such as `crypto` or `array_virtualization` describe specific implementations, not those broader capabilities; see [technique_catalog.cpp](src/birch/guard/technique_catalog.cpp).
+- Windows CLI Unicode paths can depend on the active code page. GUI cancellation, cross-platform packaging, malformed-input coverage, fuzzing, and sanitizer coverage need more work.
 
-请仅处理自己拥有或获授权处理的应用；不要把第三方 APK、凭证、个人数据或私有业务逻辑上传到 issue。
+## Roadmap
 
-### 8. 未来方向
+- ART/emulator/device regression tests across Android API versions.
+- Linux/macOS and multi-compiler CI, sanitizer runs, and parser fuzzing.
+- Better diagnostics for keep rules, reflection, JNI, and named resources.
+- Size, build-time, startup, and runtime benchmarks.
+- GUI cancellation/recovery and safer output replacement.
+- Exported CMake targets and a more stable public library API.
 
-以下是计划与欢迎贡献的方向，不代表已经实现或承诺交付时间：
+## Contributing
 
-- 建立 ART/模拟器/真实设备与不同 Android API 的回归矩阵。
-- 完善 Linux/macOS/多编译器 CI，以及 ASan/UBSan、静态分析和解析器 fuzz。
-- 扩充可移植的合成输入、指令语义与异常/monitor 边界测试。
-- 加强动态反射、JNI、序列化及资源按名访问合同的诊断与 keep 校验。
-- 建立可复现的体积、启动时间、运行性能和构建耗时基准。
-- GUI 取消、任务恢复、更清晰的失败定位与事务式输出。
-- 稳定公共 API、CMake 导出 target、构建 presets 与跨平台打包。
+Issues and PRs are welcome. For a bug report, include the platform, compiler, configuration, effective seed, and a minimal reproducer you can share. Do not upload private applications, signing keys, or sensitive mappings.
 
-### 9. 欢迎贡献 / PR
+Keep a PR focused on one change and add a regression test for a fix. For bytecode transformations, explain the affected instructions, register types, exception behavior, and size/performance impact. Run the relevant tests and the full suite, and note any device or platform behavior you could not check. Discuss larger changes in an issue first.
 
-欢迎 bug report、文档修正、测试用例和 PR。较大变更请先在 issue 中说明目标和兼容性影响。建议流程：
+## License and acknowledgments
 
-1. 使用最小、可公开的合成输入复现问题，记录编译器、平台、输入特征、完整配置与有效 `seed`；提交前移除路径、名称、mapping 和日志中的敏感信息。
-2. 一个 PR 聚焦一项改动，说明变换前后语义、安全合同和可能的体积/性能影响。
-3. 为修复增加回归，运行相关测试及完整 CTest；涉及 CFF/分区时运行 `cff-budget`，不要跳过慢测后声称全量通过。
-4. 对无法验证的设备、平台或工具链如实说明；适用且可用时补充 sanitizer/静态分析结果。
-5. 保留第三方许可；不要引入应用样本、密钥、构建产物或历史版本说明。
+Birch is released under the [MIT License](LICENSE).
 
-### 10. 致谢与许可状态
+The GUI uses [Dear ImGui](ImGUI/imgui-1.93.0/LICENSE.txt) by Omar Cornut and contributors and [GLFW](ImGUI/glfw-3.4/LICENSE.md) by Marcus Geelnard, Camilla Löwy, and contributors. ZIP compression and PNG output use [zlib](licenses/ZLIB.txt) by Jean-loup Gailly, Mark Adler, and contributors. These dependencies retain their own licenses.
 
-感谢以下项目及其贡献者：
-
-- **Dear ImGui**：Omar Cornut 及贡献者，MIT；许可见 [ImGui license](ImGUI/imgui-1.93.0/LICENSE.txt)。
-- **GLFW**：Marcus Geelnard、Camilla Löwy 及贡献者，zlib/libpng 风格许可；见 [GLFW license](ImGUI/glfw-3.4/LICENSE.md)。
-- **zlib**：Jean-loup Gailly、Mark Adler 及贡献者，用于 ZIP 压缩和 GUI PNG 输出；说明见 [zlib notice](licenses/ZLIB.txt)。实际链接的版本由工具链提供。
-- CMake、编译器、Android 格式文档及其他开放工具生态。
-
-**项目自身的开源许可证尚待所有者决定，当前没有项目级 LICENSE。公开可见的源码不等于获得使用、修改或再分发授权。** 在正式宣布开源、接受并合并外部贡献之前，应先补充明确的项目许可证与版权信息。第三方依赖继续遵守各自许可，不能因为删减文档而移除其许可声明。
-
-## English documentation
-
-### 1. Purpose and scope
-
-Birch is the project; BirchGuard is its protection pipeline and primary user-facing tool. It rewrites DEX directly and handles DEX files, binary AndroidManifest.xml, resources.arsc, and ZIP entries inside APKs. It does not decompile applications to Java and rebuild them.
-
-BirchDex supplies the parser/writer/builder, instruction and CFG models, type/liveness analysis, verification, linking, and partitioning infrastructure. BirchGuardLib adds configuration, transformations, lowering, cross-DEX renaming, resources, and reporting. BirchGuard is the transformation CLI; Birch is the low-level diagnostic CLI; BirchLinkageAudit performs read-only linkage audits. BirchGuardGUI provides the desktop interface.
-
-Implemented families include renaming, constrained structural transformations, type-domain-aware control-flow flattening, opaque predicates, string/constant transformations, generated code, and resource transformations. Eligibility depends on supported instructions and provable safety contracts, not merely on a pass being enabled.
-
-This is not an Android build system, AAB/JAR converter, native-code protector, general bytecode VM, or encrypted application packer. Names such as `crypto`, `cross_process`, `encrypted_paths`, and `array_virtualization` do not establish standardized cryptography, a separate process, a complete loader, or a VM. Consult [technique_catalog.cpp](src/birch/guard/technique_catalog.cpp) and the generated technique report for actual implementations.
-
-### 2. How it works
-
-#### Parsing, analysis, lowering, and verification
-
-The pipeline loads the APK container, manifest, resources, and DEX files; applies scope and keep rules; and constructs type, inheritance, reference, and CFG information. Model transformations may create helpers before lowering into DEX instructions. Global rename planning updates cross-DEX references and supported manifest/resource references. ID remapping, layout, optional multidex partitioning, structural/type verification, code budgets, linkage checks, and legacy loading checks precede output.
-
-`android_dex` is optional framework metadata for external inheritance/override resolution, never application code copied into the output. Supply a framework DEX appropriate to the target Android API. Missing or mismatched metadata limits resolution and rename safety.
-
-#### Renaming and runtime contracts
-
-Class, method, field, and package renaming share a global plan and reference closure. The planner conservatively handles framework overrides, package access, native/JNI, and recognized reflection contracts. Dynamically assembled names, serialization, plugins, and external integrations may still need explicit keep rules.
-
-Scope patterns are DEX descriptors, for example `Lcom/example/**;`. A matching keep rule takes precedence over protect. Protect flags `allow_renaming`, `allow_code_transforms`, and `include_members` restrict eligible work; any matching protect rule denying a flag blocks that operation. Generated helper namespaces receive special scope treatment and can participate in subsequent protection.
-
-#### Control-flow flattening and size safety
-
-CFG, register type frames, and liveness analysis establish compatible type domains. Multi-level keyed dispatchers, encoded states/selectors, joint tokens, and runtime barriers replace eligible transitions. Unknown/uninitialized values and exception entries cannot be merged indiscriminately. Dead graphs use encoded edges, decoder islands, and sharded switches rather than only empty branches.
-
-ConstantProgramOutliner, LinearRegionOutliner, and CfgRegionPlanner / CfgRegionOutliner extract safe regions under entry, continuation, type, live-in/live-out, exception, and monitor contracts. They do not split `invoke/move-result` or arbitrarily move handlers/monitor operations across try boundaries. Locks remain in the caller; unprovable cases are rejected.
-
-CffCodeBudget counts business code, transitions, dead graphs, payloads, and alignment before emission, then checks actual size. On dedicated budget failures, CffPartitionPlanner refines extraction/partitioning from the pre-materialization source and reruns the pipeline with bounded retries. It does not silently lower intensity, remove dead states, or change the `seed` to obtain success.
-
-The highest-strength policy includes 1024 dead states and an internal **16000-code-unit** ceiling. A DEX code unit is 16 bits; a user setting of 65000 does not disable that stricter ceiling. Full CFF emits `const-string/jumbo` before fixing layout, so later string-ID reordering cannot unexpectedly widen those loads; the real size is budgeted immediately.
-
-OutputCodeBudget independently checks final serialized code-item sizes after renaming/partitioning. It recovers original owners through the rename map for scope checks and rejects remaining overflow. It does not secretly repartition at the output gate.
-
-#### Strings, constants, and resources
-
-Strings use a custom reversible UTF-16 transformation: four XOR/add base modes and eight per-character mixing rounds, with generated inverse runtime code. **This is not AES/ChaCha or cryptographic confidentiality: the decoder and keys ship with the application.** Constant programs, typed barriers, boolean arithmetic, constrained array/enum transformations, and metadata noise operate only at supported sites.
-
-Resource file renaming uses collision-checked 16-token Unicode basenames, synchronizes ZIP and ARSC paths, and preserves suffixes, `.9.png`, and entry order. Eligible resource package key-pool names may become BirchGuard; resource IDs, type names, and user-visible text are not intentionally changed. Name lookup, `getIdentifier`, reflection, native code, overlays, and literal paths can trigger conservative preservation, with reasons recorded in the report.
-
-#### Randomization and replay
-
-The base `seed` is not necessarily the effective `seed`. Enabled build-parameter randomization mixes configuration; non-reproducible mode also adds runtime entropy. To replay recorded effective parameters, set root `"effective_seed": "16919314818285478265"` and retain the original input, configuration, framework, and engine version. Remove the override for normal randomized builds.
-
-Root/pass seeds accept decimal `uint64` strings. Values above `9007199254740991` must be strings to avoid JSON number precision loss. `target_analysis_cost_weeks` is a policy heuristic, not a promise about actual reverse-engineering effort.
-
-### 3. Source and build
-
-Public headers live in `include/birch/`; implementation is split across `src/birch/dex/`, `guard/`, `io/`, and `utils/`. CLI and GUI code lives in `tools/`; configurations in `configs/`; synthetic regression sources in `tests/`; vendored GUI dependencies in `ImGUI/`; dependency notices in `licenses/` and the vendor directories.
-
-Requirements: **CMake 3.22+**, a C++20 compiler, and zlib development files. The GUI additionally needs a C compiler, threads, and a desktop OpenGL development environment. Dear ImGui 1.93.0 and GLFW 3.4 are vendored; missing dependencies are not downloaded automatically.
-
-```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBIRCH_BUILD_GUI=ON -DBIRCH_BUILD_TESTS=ON
-cmake --build build --parallel 4
-ctest --test-dir build --output-on-failure -j 3
-```
-
-Use a terminal with the compiler, Ninja, and zlib configured. Set `ZLIB_ROOT`, or `ZLIB_INCLUDE_DIR` plus the full `ZLIB_LIBRARY` path, when discovery fails. The MinGW fallback only uses development files that actually exist. Compiler runtime DLLs must be discoverable when running Windows executables.
-
-For Visual Studio, omit `-G Ninja`, build with `--config Release`, and test with `-C Release`; independently validate that toolchain. Linux GUI builds require development packages for the enabled GLFW X11/Wayland backends and OpenGL. Add `-DGLFW_BUILD_WAYLAND=OFF` if Wayland is not needed. macOS requires its development tools and OpenGL 3.2 core support. Windows is the locally exercised platform; source support is not a claim of tested Linux/macOS releases.
-
-For CLI-only builds, configure a separate directory with `-DBIRCH_BUILD_GUI=OFF`. Tests can be disabled with `-DBIRCH_BUILD_TESTS=OFF`. Single-configuration CLI outputs are in `build/`, the GUI in `build/tools/gui/`; multi-configuration generators add configuration subdirectories.
-
-BirchDex and BirchGuardLib can be consumed as in-tree static CMake targets. A stable ABI and complete installed `find_package(Birch)` interface are not provided yet.
-
-```sh
-cmake --install build --prefix install
-cpack --config build/CPackConfig.cmake -G ZIP -B dist
-```
-
-For multi-configuration builds, add `--config Release` to install and `-C Release` to CPack. Installation includes CLI tools, the enabled GUI, core static libraries, public headers, configs, and notices. The CPack ZIP contains installed artifacts, not a complete source archive; compiler/zlib runtimes are not bundled automatically. Check deployment on a clean machine. Historical application-sample packaging scripts are not part of this workflow.
-
-Application/framework binaries, outputs, mapping, signing keys, old version notes, and build artifacts should not be committed. `.gitignore` excludes these and unused vendor examples/backends; it neither physically deletes files nor untracks existing files. Required dependency licenses must remain, even when written in Markdown.
-
-### 4. Configuration and CLI
-
-Start with `BirchGuard --list-passes`. [rename_only.json](configs/rename_only.json) focuses on renaming; [resource_only.json](configs/resource_only.json) focuses on APK resources; [release_full.json](configs/release_full.json) is a high-growth, high-strength research profile, not a universally safe production default.
-
-Unspecified passes inherit engine defaults: `_only` filenames do not automatically disable every other pass. Explicitly disable unwanted passes for strict allowlisting. Unknown keys, unknown pass IDs, and invalid parameters are rejected.
-
-Replace `Lcom/example/**;` with your application descriptor scope; configure keep rules, framework metadata, and a private mapping path. Paths inside JSON are resolved relative to the **process working directory**, not the JSON directory. No application/framework fixture is required by the generic configs.
-
-From the repository root on Windows PowerShell:
-
-```powershell
-.\build\BirchGuard.exe --list-passes
-.\build\BirchGuard.exe --config configs/rename_only.json --inspect-apk input.apk
-.\build\BirchGuard.exe --config configs/release_full.json --transform-apk input.apk output-unsigned.apk
-.\build\BirchGuard.exe --config my-dex.json --transform-dex input.dex output.dex
-.\build\Birch.exe --help
-.\build\Birch.exe input.dex --verify
-.\build\BirchLinkageAudit.exe input.apk
-```
-
-Use ./build/BirchGuard etc. on Unix-like systems. Supply your own authorized input. For standalone DEX, disable `resources.rename_files`, `resources.rename_names`, and both `resources.file_rename` / `resources.name_rename` passes. The GUI rejects incompatible resource settings.
-
-Diagnostics include `Birch input.dex --map`, `--scan-cfg`, `--verify`, or `--audit-cff`; `Birch --partition <directory>`; and `Birch --inspect-apk <APK>`. Linkage audit syntax is `BirchLinkageAudit <APK|DEX> [android.dex] [--verbose]`. `BirchGuard --config <JSON> --prepare-fake-dex <output.dex>` generates research input, not an installable application.
-
-Success returns 0, bad arguments 2, and parsing/transformation/verification failures 1. The Windows CLI uses narrow argv and may mishandle Unicode under some system code pages; use ASCII paths or the GUI when necessary.
-
-Transformation writes the APK/DEX, `<output>.techniques.txt`, and optionally the configured mapping. Reports record effective `seed`, actual implementation, recorded application counts, and compatibility warnings. Zero counts or `not instrumented` are not proof of applied protection. Mapping and reports may expose name correspondence and build parameters; keep them private.
-
-Input, output, mapping, and report paths must not overlap, including hard-link aliases. The CLI can replace existing output, so back it up; the GUI requests replacement confirmation.
-
-### 5. GUI and signing
-
-`build/tools/gui/BirchGuardGUI` is an English-language desktop application with an iOS-inspired visual style, not an iOS app. It supports path entry/drop, JSON import, scope/framework/mapping settings, pass filtering, and intensity controls. Applying Balanced/Strong/Maximum presets re-enables compatible passes. Debug-local noise and debug-info removal are mutually exclusive.
-
-Jobs capture a configuration snapshot and run on `std::jthread`. A mutex-protected progress queue is capped at 2000 entries; workers never call ImGui. Settings are locked during work. Disabling live logs does not disable verification. Cancellation/resume is not implemented; closing is deferred during a running job, and long stages have no reliable percentage estimate.
-
-With working desktop OpenGL, `BirchGuardGUI --smoke-test` and `--screenshot gui.png` perform basic hidden-window rendering checks, not full interaction or high-DPI acceptance tests.
-
-APK outputs are **unsigned**, with stale signatures removed. Built-in signing is unavailable and enabling it errors. Use external Android SDK zipalign/apksigner tools and an authorized signing key, then verify the signature. Never commit keys or passwords. Changed certificates may break updates, integrity checks, or integrations. Validate installation, startup, business flows, resources, exceptions, and performance on target devices after signing.
-
-### 6. Tests and known limitations
-
-Retained regression sources construct synthetic inputs at runtime instead of requiring third-party APK/DEX/framework fixtures. Generated APKs are format/pipeline inputs, not installable applications. Assertions remain enabled for Release tests. Test interpreters implement a limited instruction/API oracle, not a complete Android runtime.
-
-```sh
-ctest --test-dir build --output-on-failure
-ctest --test-dir build -L cff-budget --output-on-failure
-ctest --test-dir build -LE extended --output-on-failure -j 3
-ctest --test-dir build -L extended --output-on-failure
-```
-
-`cff-budget` exercises size, type/liveness, region, exception, and monitor contracts. `extended` currently selects the slower linear-region outliner regression. Full CTest includes both.
-
-Known limitations:
-
-- Static checks do not prove ART/device compatibility; there is no all-APK or all-Android-version guarantee.
-- Dynamic reflection, JNI, serialization, plugins, resource-name lookup, and application self-checks can still break. Explicit keep rules and application acceptance tests remain necessary.
-- High-strength CFF, helpers, and dead graphs increase size, call depth, build cost, and runtime overhead, and may trigger explicit budget rejection. No universal performance benchmark or protection score is established.
-- Reversible string transformations and opaque/dead code can be analyzed or simplified; they are not cryptographic security boundaries.
-- Malformed-input, fuzzing, and sanitizer coverage need expansion. The local MinGW toolchain lacks usable ASan/UBSan runtimes; sanitizer success is not claimed.
-- Linux/macOS, other compiler combinations, high-DPI interaction, CLI Unicode paths, cancellation/resume, and transactional output need further validation or development.
-- Built-in APK signing, SDK/framework downloads, stable ABI, and automatic deployment dependency collection are not provided.
-
-Only process software you own or are authorized to transform. Do not upload third-party applications, credentials, private business logic, or personal data in issues.
-
-### 7. Roadmap
-
-Planned directions, not implemented features or delivery promises:
-
-- ART/emulator/device regression matrices across Android APIs.
-- Linux/macOS/multi-compiler CI, ASan/UBSan, static analysis, and parser fuzzing.
-- More portable synthetic inputs and semantic exception/monitor regressions.
-- Better diagnostics and keep validation for reflection, JNI, serialization, and named resources.
-- Reproducible size, startup/runtime, and build-time benchmarks.
-- GUI cancellation, recovery, failure diagnostics, and transactional output.
-- Stable public APIs, exported CMake targets, presets, and cross-platform packaging.
-
-### 8. Contributions welcome
-
-Bug reports, documentation, tests, and PRs are welcome. Discuss substantial changes in an issue first. Keep each PR focused; explain semantics, safety contracts, and size/performance impact. Add a public minimal synthetic reproducer and regression, include platform/compiler/configuration/effective `seed`, and redact private paths, mapping, logs, and names.
-
-Run relevant tests and full CTest; run `cff-budget` for CFF/partition changes. Do not claim full success after skipping slow tests. State untested platforms/device behavior honestly and include sanitizer/static-analysis results when applicable and available. Preserve dependency notices; do not add application samples, credentials, build outputs, or version-by-version notes.
-
-### 9. Acknowledgments and licensing status
-
-Thanks to Dear ImGui (Omar Cornut and contributors; MIT, [ImGui license](ImGUI/imgui-1.93.0/LICENSE.txt)), GLFW (Marcus Geelnard, Camilla Löwy and contributors; zlib/libpng-style license, [GLFW license](ImGUI/glfw-3.4/LICENSE.md)), and zlib (Jean-loup Gailly, Mark Adler and contributors; ZIP/PNG support, notice in [zlib notice](licenses/ZLIB.txt)). The linked zlib version is supplied by the toolchain. Thanks also to CMake, compiler authors, Android format documentation, and the wider open tooling ecosystem.
-
-**The owner has not yet selected a project-level open-source license; there is currently no project LICENSE. Public source visibility does not grant usage, modification, or redistribution rights.** Add explicit project licensing/copyright terms before announcing an open-source release or accepting and merging external contributions. Dependency terms remain applicable independently; their notices must not be removed with obsolete documentation.
+Thanks to their maintainers and to the authors of the compilers, CMake, and Android tooling and format documentation used by this project.
